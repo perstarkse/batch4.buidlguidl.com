@@ -4,68 +4,74 @@ pragma solidity >=0.8.0 <0.9.0;
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract BatchRegistry is Ownable {
+	uint256 constant CHECK_IN_REWARD = 0.01 ether;
 
-    uint256 constant CHECK_IN_REWARD = 0.01 ether;
+	mapping(address => bool) public allowList;
+	mapping(address => address) public yourContractAddress;
+	bool public isOpen = true;
+	uint256 public checkedInCounter;
 
-    mapping(address => bool) public allowList;
-    mapping(address => address) public yourContractAddress;
-    bool public isOpen = true;
-    uint256 public checkedInCounter;
+	event CheckedIn(bool first, address builder, address checkInContract);
 
-    event CheckedIn(bool first, address builder, address checkInContract);
+	// Errors
+	error BatchNotOpen();
+	error NotAContract();
+	error NotInAllowList();
 
-    // Errors
-    error BatchNotOpen();
-    error NotAContract();
-    error NotInAllowList();
+	modifier batchIsOpen() {
+		if (!isOpen) revert BatchNotOpen();
+		_;
+	}
 
+	modifier senderIsContract() {
+		if (tx.origin == msg.sender) revert NotAContract();
+		_;
+	}
 
-    modifier batchIsOpen() {
-        if (!isOpen) revert BatchNotOpen();
-        _;
-    }
+	constructor(address initialOwner) {
+		super.transferOwnership(initialOwner);
+	}
 
-    modifier senderIsContract() {
-        if (tx.origin == msg.sender) revert NotAContract();
-        _;
-    }
+	function updateAllowList(
+		address[] calldata builders,
+		bool[] calldata statuses
+	) public onlyOwner {
+		require(
+			builders.length == statuses.length,
+			"Builders and statuses length mismatch"
+		);
 
-    constructor(address initialOwner) {
-        super.transferOwnership(initialOwner);
-    }
+		for (uint i = 0; i < builders.length; i++) {
+			allowList[builders[i]] = statuses[i];
+		}
+	}
 
-    function updateAllowList(address[] calldata builders, bool[] calldata statuses) public onlyOwner {
-        require(builders.length == statuses.length, "Builders and statuses length mismatch");
+	function toggleBatchOpenStatus() public onlyOwner {
+		isOpen = !isOpen;
+	}
 
-        for (uint i = 0; i < builders.length; i++) {
-            allowList[builders[i]] = statuses[i];
-        }
-    }
+	function checkIn() public senderIsContract batchIsOpen {
+		if (!allowList[tx.origin]) revert NotInAllowList();
 
-    function toggleBatchOpenStatus() public onlyOwner {
-        isOpen = !isOpen;
-    }
+		bool wasFirstTime;
+		if (yourContractAddress[tx.origin] == address(0)) {
+			checkedInCounter++;
+			wasFirstTime = true;
+			(bool success, ) = tx.origin.call{ value: CHECK_IN_REWARD }("");
+			require(success, "Failed to send check in reward");
+		}
 
-    function checkIn() public senderIsContract batchIsOpen {
-        if (!allowList[tx.origin]) revert NotInAllowList();
+		yourContractAddress[tx.origin] = msg.sender;
+		emit CheckedIn(wasFirstTime, tx.origin, msg.sender);
+	}
 
-        bool wasFirstTime;
-        if (yourContractAddress[tx.origin] == address(0)) {
-            checkedInCounter++;
-            wasFirstTime = true;
-            (bool success, ) = tx.origin.call{value: CHECK_IN_REWARD}("");
-            require(success, "Failed to send check in reward");
-        }
+	// Withdraw function for admins in case some builders don't end up checking in
+	function withdraw() public onlyOwner {
+		(bool success, ) = payable(owner()).call{
+			value: address(this).balance
+		}("");
+		require(success, "Failed to withdraw");
+	}
 
-        yourContractAddress[tx.origin] = msg.sender;
-        emit CheckedIn(wasFirstTime, tx.origin, msg.sender);
-    }
-
-    // Withdraw function for admins in case some builders don't end up checking in
-    function withdraw() public onlyOwner {
-        (bool success, ) = payable(owner()).call{value: address(this).balance}("");
-        require(success, "Failed to withdraw");
-    }
-
-    receive() external payable {}
+	receive() external payable {}
 }
